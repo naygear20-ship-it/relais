@@ -6,7 +6,9 @@ const FILE = path.join(DATA, 'schedules.json');
 let schedules = (() => { try { return JSON.parse(fs.readFileSync(FILE)); } catch { return []; } })();
 schedules.forEach(s => { if (!s.groupIds) { s.groupIds = [s.groupId]; s.groupNames = [s.groupName]; s.name = s.name || s.groupName; } });
 const save = () => fs.writeFileSync(FILE, JSON.stringify(schedules, null, 2));
-let state = 'starting', qr = null, groups = [], client = null, logs = [];
+process.on('unhandledRejection', e => console.error('unhandledRejection:', e));
+process.on('uncaughtException', e => console.error('uncaughtException:', e));
+let err = null, state = 'starting', qr = null, groups = [], client = null, logs = [];
 const log = (msg, ok = true) => { logs.unshift({ t: new Date().toISOString(), msg, ok }); logs.length = Math.min(logs.length, 100); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -26,20 +28,26 @@ async function startWA() {
     }, 6000);
     return;
   }
+  console.log('Démarrage de WhatsApp (Chromium)…');
   const { Client, LocalAuth } = require('whatsapp-web.js');
   fs.rmSync(path.join(DATA, 'auth/session/SingletonLock'), { force: true });
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: path.join(DATA, 'auth') }),
-    puppeteer: { headless: true, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] }
+    puppeteer: { headless: true, timeout: 0, protocolTimeout: 300000, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-first-run', '--no-zygote', '--disable-extensions'] }
   });
-  client.on('qr', async q => { state = 'qr'; qr = await QR.toDataURL(q, { width: 320, margin: 1 }); });
-  client.on('ready', async () => { state = 'ready'; qr = null; await refreshGroups(); log('WhatsApp connecté'); });
+  client.on('loading_screen', (p, m) => console.log('Chargement WhatsApp', p + '%', m));
+  client.on('auth_failure', m => { err = String(m); console.error('auth_failure:', m); });
+  client.on('qr', async q => { console.log('QR code prêt'); err = null; state = 'qr'; qr = await QR.toDataURL(q, { width: 320, margin: 1 }); });
+  client.on('ready', async () => { console.log('WhatsApp prêt'); err = null; state = 'ready'; qr = null; await refreshGroups(); log('WhatsApp connecté'); });
   client.on('disconnected', r => {
     state = 'disconnected'; log('Déconnecté : ' + r, false);
     client.destroy().catch(() => {}); setTimeout(startWA, 5000);
   });
-  client.initialize().catch(e => { state = 'disconnected'; log('Erreur démarrage : ' + e.message, false); });
+  client.initialize().catch(e => {
+    state = 'disconnected'; err = e.message; console.error('ERREUR DÉMARRAGE:', e); log('Erreur démarrage : ' + e.message, false);
+    client.destroy().catch(() => {}); setTimeout(startWA, 15000);
+  });
 }
 async function send(s) {
   let ok = 0;
@@ -82,7 +90,7 @@ app.use((req, res, next) => {
   res.set('WWW-Authenticate', 'Basic realm="Relais"').status(401).send('Authentification requise');
 });
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('/api/status', (_, res) => res.json({ state, qr, mock: MOCK }));
+app.get('/api/status', (_, res) => res.json({ state, qr, mock: MOCK, err }));
 app.get('/api/groups', async (req, res) => { if (req.query.refresh && state === 'ready') await refreshGroups().catch(() => {}); res.json(groups); });
 app.get('/api/logs', (_, res) => res.json(logs));
 app.get('/api/schedules', (_, res) => res.json(schedules));
