@@ -1,0 +1,115 @@
+const express = require('express'), fs = require('fs'), path = require('path'), QR = require('qrcode');
+const DATA = process.env.DATA_DIR || '/data', PORT = process.env.PORT || 3000;
+const MOCK = process.env.WA_MOCK === '1', PASS = process.env.ADMIN_PASSWORD || '';
+fs.mkdirSync(DATA, { recursive: true });
+const FILE = path.join(DATA, 'schedules.json');
+let schedules = (() => { try { return JSON.parse(fs.readFileSync(FILE)); } catch { return []; } })();
+schedules.forEach(s => { if (!s.groupIds) { s.groupIds = [s.groupId]; s.groupNames = [s.groupName]; s.name = s.name || s.groupName; } });
+const save = () => fs.writeFileSync(FILE, JSON.stringify(schedules, null, 2));
+let state = 'starting', qr = null, groups = [], client = null, logs = [];
+const log = (msg, ok = true) => { logs.unshift({ t: new Date().toISOString(), msg, ok }); logs.length = Math.min(logs.length, 100); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ---------- WhatsApp ----------
+async function refreshGroups() {
+  if (MOCK) return;
+  groups = (await client.getChats()).filter(c => c.isGroup)
+    .map(c => ({ id: c.id._serialized, name: c.name, size: (c.participants || []).length }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+async function startWA() {
+  if (MOCK) {
+    state = 'qr'; qr = await QR.toDataURL('relais-demo', { width: 320, margin: 1 });
+    setTimeout(() => {
+      state = 'ready'; qr = null; log('Mode démo : connecté');
+      groups = ['Famille', 'Promo INPHB', 'Équipe projet', 'Voisins'].map((name, i) => ({ id: `demo${i}@g.us`, name, size: 8 + i * 13 }));
+    }, 6000);
+    return;
+  }
+  const { Client, LocalAuth } = require('whatsapp-web.js');
+  fs.rmSync(path.join(DATA, 'auth/session/SingletonLock'), { force: true });
+  client = new Client({
+    authStrategy: new LocalAuth({ dataPath: path.join(DATA, 'auth') }),
+    puppeteer: { headless: true, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] }
+  });
+  client.on('qr', async q => { state = 'qr'; qr = await QR.toDataURL(q, { width: 320, margin: 1 }); });
+  client.on('ready', async () => { state = 'ready'; qr = null; await refreshGroups(); log('WhatsApp connecté'); });
+  client.on('disconnected', r => {
+    state = 'disconnected'; log('Déconnecté : ' + r, false);
+    client.destroy().catch(() => {}); setTimeout(startWA, 5000);
+  });
+  client.initialize().catch(e => { state = 'disconnected'; log('Erreur démarrage : ' + e.message, false); });
+}
+async function send(s) {
+  let ok = 0;
+  for (const [i, id] of s.groupIds.entries()) {
+    try { if (MOCK) await sleep(300); else await client.sendMessage(id, s.message); ok++; }
+    catch (e) { log(`Échec « ${s.groupNames[i]} » : ${e.message}`, false); }
+    if (i < s.groupIds.length - 1) await sleep(MOCK ? 300 : 3000 + Math.random() * 5000);
+  }
+  save(); log(`« ${s.name} » : envoyé à ${ok}/${s.groupIds.length} groupe(s)`, ok > 0);
+}
+// Les ensembles dus passent dans une file : un seul envoi à la fois, jamais de doublon.
+const queue = []; let working = false;
+async function enqueue(s) {
+  queue.push(s); if (working) return; working = true;
+  while (queue.length) await send(queue.shift());
+  working = false;
+}
+
+// ---------- Planificateur (vérifie toutes les 20 s) ----------
+const pad = n => String(n).padStart(2, '0');
+setInterval(async () => {
+  if (state !== 'ready') return;
+  const d = new Date(), hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`, key = `${d.toDateString()} ${hm}`;
+  for (const s of schedules.filter(x => x.enabled)) {
+    let due = false;
+    if (s.mode === 'daily') due = s.time === hm && s.days.includes(d.getDay()) && s.lastKey !== key;
+    else due = Date.now() - (s.lastRun || 0) >= s.everyMin * 60000;
+    if (!due) continue;
+    s.lastKey = key; s.lastRun = Date.now(); enqueue(s);
+  }
+}, 20000);
+
+// ---------- API ----------
+const app = express();
+app.use(express.json());
+app.use((req, res, next) => {
+  if (!PASS) return next();
+  const [, b64] = (req.headers.authorization || '').split(' ');
+  if (b64 && Buffer.from(b64, 'base64').toString().split(':').slice(1).join(':') === PASS) return next();
+  res.set('WWW-Authenticate', 'Basic realm="Relais"').status(401).send('Authentification requise');
+});
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/api/status', (_, res) => res.json({ state, qr, mock: MOCK }));
+app.get('/api/groups', async (req, res) => { if (req.query.refresh && state === 'ready') await refreshGroups().catch(() => {}); res.json(groups); });
+app.get('/api/logs', (_, res) => res.json(logs));
+app.get('/api/schedules', (_, res) => res.json(schedules));
+const clean = b => {
+  const gs = (Array.isArray(b.groupIds) ? b.groupIds : []).map(id => groups.find(x => x.id === id)).filter(Boolean);
+  if (!gs.length || !String(b.message || '').trim()) return null;
+  const mode = b.mode === 'interval' ? 'interval' : 'daily';
+  return { name: String(b.name || '').trim() || gs.map(g => g.name).slice(0, 2).join(', '),
+    groupIds: gs.map(g => g.id), groupNames: gs.map(g => g.name),
+    message: String(b.message).trim(), mode, enabled: b.enabled !== false,
+    time: /^\d{2}:\d{2}$/.test(b.time) ? b.time : '09:00',
+    days: Array.isArray(b.days) && b.days.length ? b.days.map(Number).filter(n => n >= 0 && n <= 6) : [0, 1, 2, 3, 4, 5, 6],
+    everyMin: Math.max(5, parseInt(b.everyMin) || 60) };
+};
+app.post('/api/schedules', (req, res) => {
+  const s = clean(req.body); if (!s) return res.status(400).json({ error: 'Groupe ou message invalide' });
+  schedules.push({ id: Date.now().toString(36), lastRun: Date.now(), ...s }); save(); res.json({ ok: true });
+});
+app.put('/api/schedules/:id', (req, res) => {
+  const i = schedules.findIndex(x => x.id === req.params.id), s = clean({ ...schedules[i], ...req.body });
+  if (i < 0 || !s) return res.status(400).json({ error: 'Invalide' });
+  schedules[i] = { ...schedules[i], ...s }; save(); res.json({ ok: true });
+});
+app.delete('/api/schedules/:id', (req, res) => { schedules = schedules.filter(x => x.id !== req.params.id); save(); res.json({ ok: true }); });
+app.post('/api/schedules/:id/run', async (req, res) => {
+  const s = schedules.find(x => x.id === req.params.id);
+  if (!s || state !== 'ready') return res.status(400).json({ error: 'WhatsApp non connecté' });
+  enqueue(s); res.json({ ok: true });
+});
+app.listen(PORT, () => { console.log(`Relais sur :${PORT}${MOCK ? ' (démo)' : ''}`); startWA(); });
