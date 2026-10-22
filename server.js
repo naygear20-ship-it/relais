@@ -33,7 +33,7 @@ async function startWA() {
   fs.rmSync(path.join(DATA, 'auth/session/SingletonLock'), { force: true });
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: path.join(DATA, 'auth') }),
-    puppeteer: { headless: true, timeout: 0, protocolTimeout: 300000, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+    puppeteer: { headless: true, defaultViewport: { width: 1280, height: 800 }, timeout: 0, protocolTimeout: 300000, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-first-run', '--no-zygote', '--disable-extensions'] }
   });
   client.on('loading_screen', (p, m) => console.log('Chargement WhatsApp', p + '%', m));
@@ -92,6 +92,16 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/status', (_, res) => res.json({ state, qr, mock: MOCK, err }));
 app.get('/api/groups', async (req, res) => { if (req.query.refresh && state === 'ready') await refreshGroups().catch(() => {}); res.json(groups); });
+// Capture du navigateur interne (Chromium headless qui fait tourner WhatsApp Web)
+app.get('/api/screenshot', async (_, res) => {
+  try {
+    if (MOCK) return res.type('svg').send('<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800"><rect width="100%" height="100%" fill="#e9edef"/><text x="640" y="400" font-size="34" text-anchor="middle" font-family="sans-serif" fill="#41525d">Mode démo : pas de navigateur interne</text></svg>');
+    const page = client && client.pupPage;
+    if (!page || page.isClosed()) return res.status(503).json({ error: `Navigateur interne non démarré (état : ${state})${err ? ' : ' + err : ''}` });
+    const png = await page.screenshot({ type: 'png' });
+    res.set('Cache-Control', 'no-store').type('png').send(Buffer.from(png));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.get('/api/logs', (_, res) => res.json(logs));
 app.get('/api/schedules', (_, res) => res.json(schedules));
 const clean = b => {
