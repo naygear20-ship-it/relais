@@ -69,7 +69,7 @@ async function dismissWhatsAppStartupPopup(activeClient) {
     const popup = document.querySelector('[data-testid="confirm-popup"]');
     const title = popup && popup.querySelector('[data-testid="popup-title"]');
     const text = (title && title.innerText || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-    return Boolean(popup && /what'?s new on whatsapp web|novedades? de whatsapp web|novedades? sur whatsapp web/.test(text));
+    return Boolean(popup && /what'?s new on whatsapp web|novedades? (?:de|sur) whatsapp web|nouveaut[eé]s? sur whatsapp web/.test(text));
   });
   if (!await hasWelcomePopup()) return false;
   const popup = await page.$('[data-testid="confirm-popup"]');
@@ -78,7 +78,8 @@ async function dismissWhatsAppStartupPopup(activeClient) {
     const isContinueButton = await button.evaluate(element => {
       const style = window.getComputedStyle(element), rect = element.getBoundingClientRect();
       const label = (element.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      return ['continue', 'continuer'].includes(label) && style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+      return ['continue', 'continuer'].includes(label) && element.getAttribute('aria-disabled') !== 'true' &&
+        style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
     });
     if (!isContinueButton) continue;
     try {
@@ -109,11 +110,6 @@ function watchWhatsAppStartupPopup(activeClient) {
   let attempts = 0;
   const check = async () => {
     if (state !== 'ready' || client !== activeClient) return;
-    if (attempts >= 60) {
-      log('La fenêtre de bienvenue WhatsApp est toujours présente; fermeture automatique non confirmée.', false);
-      startupPopupTimer = null;
-      return;
-    }
     attempts++;
     try {
       if (await dismissWhatsAppStartupPopup(activeClient)) {
@@ -126,7 +122,7 @@ function watchWhatsAppStartupPopup(activeClient) {
       console.error('Fermeture automatique de la fenêtre WhatsApp impossible:', e);
       log('Fermeture automatique de la fenêtre WhatsApp impossible : ' + e.message, false);
     }
-    startupPopupTimer = setTimeout(check, 2000);
+    startupPopupTimer = setTimeout(check, attempts < 60 ? 2000 : 10000);
   };
   check();
 }
