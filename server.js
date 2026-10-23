@@ -57,11 +57,52 @@ function requireLogin(req, res, next) {
 process.on('unhandledRejection', e => console.error('unhandledRejection:', e));
 process.on('uncaughtException', e => console.error('uncaughtException:', e));
 let err = null, state = 'starting', qr = null, groups = [], client = null, logs = [];
-let groupsLoading = false, groupsError = null, groupsRetryTimer = null, groupsRetryCount = 0, groupsRefreshPromise = null, groupsGeneration = 0;
+let groupsLoading = false, groupsError = null, groupsRetryTimer = null, groupsRetryCount = 0, groupsRefreshPromise = null, groupsGeneration = 0, startupPopupTimer = null;
 const log = (msg, ok = true) => { logs.unshift({ t: new Date().toISOString(), msg, ok }); logs.length = Math.min(logs.length, 100); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------- WhatsApp ----------
+async function dismissWhatsAppStartupPopup(activeClient) {
+  const page = activeClient && activeClient.pupPage;
+  if (!page || page.isClosed()) return false;
+  return page.evaluate(() => {
+    const visible = element => {
+      const style = window.getComputedStyle(element), rect = element.getBoundingClientRect();
+      return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+    };
+    const pageText = (document.body.innerText || '').replace(/\s+/g, ' ').toLowerCase();
+    const isWelcomePopup = /what'?s new on whatsapp web|novedades de whatsapp web|nouveautés de whatsapp web/.test(pageText);
+    if (!isWelcomePopup) return false;
+    const button = [...document.querySelectorAll('button, [role="button"]')].find(element => {
+      const label = (element.innerText || element.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      return visible(element) && label === 'continue';
+    });
+    if (!button) return false;
+    button.click();
+    return true;
+  });
+}
+function watchWhatsAppStartupPopup(activeClient) {
+  clearTimeout(startupPopupTimer);
+  let attempts = 0;
+  const check = async () => {
+    if (state !== 'ready' || client !== activeClient || attempts >= 30) return;
+    attempts++;
+    try {
+      if (await dismissWhatsAppStartupPopup(activeClient)) {
+        log('Fenêtre de bienvenue WhatsApp fermée automatiquement');
+        scheduleGroupRefresh(1000);
+        startupPopupTimer = null;
+        return;
+      }
+    } catch (e) {
+      console.error('Fermeture automatique de la fenêtre WhatsApp impossible:', e);
+      log('Fermeture automatique de la fenêtre WhatsApp impossible : ' + e.message, false);
+    }
+    startupPopupTimer = setTimeout(check, 2000);
+  };
+  check();
+}
 function scheduleGroupRefresh(delay) {
   clearTimeout(groupsRetryTimer);
   groupsRetryTimer = setTimeout(() => {
@@ -136,11 +177,12 @@ async function startWA() {
   client.on('qr', async q => { console.log('QR code prêt'); err = null; state = 'qr'; qr = await QR.toDataURL(q, { width: 320, margin: 1 }); });
   client.on('ready', () => {
     console.log('WhatsApp prêt'); err = null; state = 'ready'; qr = null;
-    log('WhatsApp connecté'); refreshGroups();
+    log('WhatsApp connecté'); watchWhatsAppStartupPopup(client); refreshGroups();
   });
   client.on('disconnected', r => {
     state = 'disconnected'; log('Déconnecté : ' + r, false);
     clearTimeout(groupsRetryTimer); groupsRetryTimer = null;
+    clearTimeout(startupPopupTimer); startupPopupTimer = null;
     groupsGeneration++; groupsRefreshPromise = null; groupsLoading = false;
     groups = []; groupsError = 'WhatsApp est déconnecté.'; groupsRetryCount = 0;
     client.destroy().catch(() => {}); setTimeout(startWA, 5000);

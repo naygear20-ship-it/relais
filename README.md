@@ -18,5 +18,6 @@ Tableau de bord web : QR code WhatsApp, création de compte intégrée, liste de
 - Fuseau : TZ=Africa/Abidjan (modifiable dans le Dockerfile)
 - Le mot de passe du compte est haché avec scrypt et les sessions utilisent un cookie HttpOnly. Le compte est conservé dans `/data/account.json`; les sessions expirent à l'arrêt du serveur et il faudra se reconnecter. Il n'existe pas de récupération de mot de passe : conserve-le dans un gestionnaire de mots de passe.
 - Dans la capture agrandie, « Clavier virtuel » envoie les touches autorisées ou jusqu'à 500 caractères directement à la page WhatsApp Web; l'image peut être actualisée après chaque action. La touche Entrée demande une confirmation, car elle peut envoyer le message actif.
+- Après la connexion WhatsApp, Relais recherche pendant environ 60 secondes la fenêtre « What's new on WhatsApp Web ». Il clique automatiquement sur son bouton « Continue », puis relance le chargement des groupes.
 - Après la connexion, les groupes sont synchronisés automatiquement avec de nouvelles tentatives si WhatsApp Web n'a pas encore chargé les discussions. Le journal et l'état de l'interface signalent les erreurs; le bouton « Actualiser » déclenche une nouvelle tentative immédiate.
 - Automatiser WhatsApp Web va contre les conditions de WhatsApp : évite les rythmes trop rapides et ton numéro principal.
