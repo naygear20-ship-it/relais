@@ -49,7 +49,7 @@ dialog::backdrop{background:#1b232066}label{display:block;font-weight:700;font-s
 #shotbig a{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--card);color:var(--ink);padding:9px 18px;border-radius:12px;font-weight:700;text-decoration:none}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
-<header><h1>Vos groupes WhatsApp, des messages à l'heure dite.</h1><div class="pill" id="pill"><span class="dot"></span><span id="st">Démarrage…</span></div></header>
+<header><h1>Vos groupes WhatsApp, des messages à l'heure dite.</h1><div class="acts"><div class="pill" id="pill"><span class="dot"></span><span id="st">Démarrage…</span></div><button id="logout" hidden onclick="logout()">Déconnexion</button></div></header>
 <main id="app"></main>
 <dialog id="dlg"><h2 id="dt">Nouvelle programmation</h2>
 <label>Nom de l'ensemble</label><input id="fn" placeholder="Ex. Promos du matin">
@@ -64,26 +64,59 @@ dialog::backdrop{background:#1b232066}label{display:block;font-weight:700;font-s
 <div id="shotbig" hidden><img id="shotbigimg" alt="Capture agrandie"><a id="shotdl" download="capture-relais.png">Télécharger</a></div>
 <script>
 const $=s=>document.querySelector(s),J=['D','L','M','M','J','V','S'],JN=['dim','lun','mar','mer','jeu','ven','sam'];
-const esc=s=>String(s).replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const api=(u,m='GET',b)=>fetch(u,{method:m,headers:{'Content-Type':'application/json'},body:b&&JSON.stringify(b)}).then(r=>r.json());
-let sel=new Set(),S={state:'starting'},G=[],SC=[],L=[],q='',edit=null,mode='daily',days=[0,1,2,3,4,5,6],built=false;
+let sel=new Set(),S={state:'starting'},G=[],SC=[],L=[],q='',edit=null,mode='daily',days=[0,1,2,3,4,5,6],built=false,auth={configured:false,authenticated:false},authError='';
 const LBL={starting:'Démarrage…',qr:'En attente du scan',ready:'Connecté',disconnected:'Déconnecté, reconnexion…'};
 async function tick(){
-  try{S=await api('/api/status')}
+  try{[auth,S]=await Promise.all([api('/api/auth/status'),api('/api/status')])}
   catch(e){console.error(e);$('#pill').className='pill disconnected';$('#st').textContent='Serveur injoignable';return}
   $('#pill').className='pill '+S.state;$('#st').textContent=LBL[S.state]+(S.mock?' (démo)':'');
-  if(S.state==='ready'){
+  $('#logout').hidden=!auth.authenticated;
+  if(auth.authenticated&&S.state==='ready'){
     try{
       const [groups,schedules,logs]=await Promise.all([api('/api/groups'),api('/api/schedules'),api('/api/logs')]);
       if(Array.isArray(groups))G=groups;
       SC=schedules;L=logs;
     }catch(e){S.groupsError=`Erreur de communication avec le serveur : ${e.message}`;console.error(e)}
   }
-  if(!(document.activeElement&&document.activeElement.id==='q'))render();
+  const enteringCredentials=!auth.authenticated&&document.activeElement&&document.activeElement.closest('#app form');
+  if(!enteringCredentials&&!(document.activeElement&&document.activeElement.id==='q'))render();
+}
+function renderAuth(){
+  built=false;
+  const setup=!auth.configured;
+  const waiting=setup&&S.state!=='ready';
+  if(waiting){$('#app').innerHTML='';render();return}
+  $('#app').innerHTML=`<section class="card qr"><h2>${setup?'Créer votre compte Relais':'Connexion à Relais'}</h2>
+    <p class="mut">${setup?'WhatsApp est connecté. Créez votre compte pour protéger l’accès au tableau de bord.':'Connectez-vous pour accéder à vos groupes et programmations.'}</p>
+    <form onsubmit="authSubmit(event)">
+      ${setup?'<label>Code de vérification</label><input name="verificationCode" type="password" autocomplete="one-time-code" required><p class="mut">Code de vérification défini dans Sealos (ADMIN_PASSWORD, 20 caractères minimum).</p>':''}
+      <label>Nom d’utilisateur</label><input name="username" autocomplete="username" minlength="3" maxlength="32" required>
+      <label>Mot de passe</label><input name="password" type="password" autocomplete="${setup?'new-password':'current-password'}" minlength="${setup?12:1}" required>
+      ${setup?'<p class="mut">Choisis un mot de passe d’au moins 12 caractères et conserve-le : il ne peut pas être récupéré.</p>':''}
+      <p id="auth-error" class="mut" role="alert">${esc(authError)}</p>
+      <button class="pri" type="submit">${setup?'Créer mon compte':'Se connecter'}</button>
+    </form></section>`;
+}
+async function authSubmit(event){
+  event.preventDefault();authError='';
+  const form=new FormData(event.currentTarget),body=Object.fromEntries(form.entries());
+  try{
+    const result=await api(auth.configured?'/api/auth/login':'/api/auth/setup','POST',body);
+    if(result.error){authError=result.error;$('#auth-error').textContent=authError;return}
+    await tick();
+  }catch(e){authError=`Erreur de communication : ${e.message}`;$('#auth-error').textContent=authError}
+}
+async function logout(){
+  try{await api('/api/auth/logout','POST',{});auth={configured:true,authenticated:false};authError='';await tick()}
+  catch(e){alert(`Déconnexion impossible : ${e.message}`)}
 }
 function summary(s){return s.mode==='interval'?`Toutes les ${s.everyMin} min`:`${s.time} · ${s.days.length===7?'chaque jour':s.days.map(d=>JN[d]).join(', ')}`}
 function render(){
   const a=$('#app');
+  if(!auth.authenticated&&auth.configured){renderAuth();return}
+  if(!auth.authenticated&&S.state==='ready'){renderAuth();return}
   if(S.state!=='ready'){
     a.innerHTML=`<div class="card qr"><h2 style="justify-content:center">${S.qr?'Scannez pour connecter WhatsApp':'Préparation de la connexion…'}</h2>`+
     (S.qr?`<img src="${S.qr}" alt="QR code WhatsApp"><ol><li>Ouvrez WhatsApp sur votre téléphone</li><li>Réglages › Appareils connectés › Connecter un appareil</li><li>Scannez ce code (il se renouvelle tout seul)</li></ol>`:'<p class="mut">Le navigateur interne démarre, le QR code apparaît dans quelques secondes.</p>')+'</div>';built=false;return;}
