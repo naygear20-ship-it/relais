@@ -1,6 +1,6 @@
 # Relais : messages programmés pour groupes WhatsApp
 
-Tableau de bord web : QR code, liste des groupes, message et horaire par groupe, envoi immédiat, journal.
+Tableau de bord web : QR code, liste des groupes, message et horaire par groupe, envoi immédiat, journal. La capture affiche le navigateur Chromium qui exécute WhatsApp Web, pas le tableau de bord.
 
 ## Essai local (sans WhatsApp)
     npm install && WA_MOCK=1 DATA_DIR=./data node server.js     # http://localhost:3000
@@ -16,4 +16,5 @@ Tableau de bord web : QR code, liste des groupes, message et horaire par groupe,
 
 ## Notes
 - Fuseau : TZ=Africa/Abidjan (modifiable dans le Dockerfile)
+- Après la connexion, les groupes sont synchronisés automatiquement avec de nouvelles tentatives si WhatsApp Web n'a pas encore chargé les discussions. Le journal et l'état de l'interface signalent les erreurs; le bouton « Actualiser » déclenche une nouvelle tentative immédiate.
 - Automatiser WhatsApp Web va contre les conditions de WhatsApp : évite les rythmes trop rapides et ton numéro principal.

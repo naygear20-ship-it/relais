@@ -62,16 +62,23 @@ dialog::backdrop{background:#1b232066}label{display:block;font-weight:700;font-s
 <button id="shotbtn" title="Capturer la page" aria-label="Capturer la page"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8a2 2 0 0 1 2-2h1.5l1.2-2h6.6l1.2 2H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
 <div id="shotpop" hidden title="Agrandir"><img id="shotimg" alt="Dernière capture"><button id="shotx" aria-label="Fermer">×</button><span id="shottime"></span></div>
 <div id="shotbig" hidden><img id="shotbigimg" alt="Capture agrandie"><a id="shotdl" download="capture-relais.png">Télécharger</a></div>
-<script src="/vendor/html2canvas.min.js"></script>
 <script>
 const $=s=>document.querySelector(s),J=['D','L','M','M','J','V','S'],JN=['dim','lun','mar','mer','jeu','ven','sam'];
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc=s=>String(s).replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const api=(u,m='GET',b)=>fetch(u,{method:m,headers:{'Content-Type':'application/json'},body:b&&JSON.stringify(b)}).then(r=>r.json());
 let sel=new Set(),S={state:'starting'},G=[],SC=[],L=[],q='',edit=null,mode='daily',days=[0,1,2,3,4,5,6],built=false;
 const LBL={starting:'Démarrage…',qr:'En attente du scan',ready:'Connecté',disconnected:'Déconnecté, reconnexion…'};
 async function tick(){
-  S=await api('/api/status');$('#pill').className='pill '+S.state;$('#st').textContent=LBL[S.state]+(S.mock?' (démo)':'');
-  if(S.state==='ready'){[G,SC,L]=await Promise.all([api('/api/groups'),api('/api/schedules'),api('/api/logs')]);}
+  try{S=await api('/api/status')}
+  catch(e){console.error(e);$('#pill').className='pill disconnected';$('#st').textContent='Serveur injoignable';return}
+  $('#pill').className='pill '+S.state;$('#st').textContent=LBL[S.state]+(S.mock?' (démo)':'');
+  if(S.state==='ready'){
+    try{
+      const [groups,schedules,logs]=await Promise.all([api('/api/groups'),api('/api/schedules'),api('/api/logs')]);
+      if(Array.isArray(groups))G=groups;
+      SC=schedules;L=logs;
+    }catch(e){S.groupsError=`Erreur de communication avec le serveur : ${e.message}`;console.error(e)}
+  }
   if(!(document.activeElement&&document.activeElement.id==='q'))render();
 }
 function summary(s){return s.mode==='interval'?`Toutes les ${s.everyMin} min`:`${s.time} · ${s.days.length===7?'chaque jour':s.days.map(d=>JN[d]).join(', ')}`}
@@ -87,8 +94,16 @@ function render(){
   $('#lg').innerHTML=L.length?L.slice(0,12).map(l=>`<div class="log ${l.ok?'':'bad'}"><span class="mut">${new Date(l.t).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</span><b>${l.ok?'✓':'✕'}</b><span>${esc(l.msg)}</span></div>`).join(''):'<p class="mut">Rien pour l\'instant.</p>';
 }
 function lst(){const f=G.filter(g=>g.name.toLowerCase().includes(q.toLowerCase()));
-  $('#gl').innerHTML=f.length?f.map(g=>`<div class="row"><div><b>${esc(g.name)}</b><div class="mut">${g.size} membres · ${SC.filter(s=>s.groupIds.includes(g.id)).length} programmation(s)</div></div><button onclick="openD(null,'${g.id}')">Programmer</button></div>`).join(''):'<p class="mut">Aucun groupe trouvé.</p>';}
-async function refresh(){G=await api('/api/groups?refresh=1');lst()}
+  const warning=G.length&&S.groupsError?`<p class="mut">${esc(S.groupsError)}</p>`:'';
+  $('#gl').innerHTML=warning+(f.length?f.map(g=>`<div class="row"><div><b>${esc(g.name)}</b><div class="mut">${g.size} membres · ${SC.filter(s=>s.groupIds.includes(g.id)).length} programmation(s)</div></div><button onclick="openD(null,'${g.id}')">Programmer</button></div>`).join(''):G.length?'<p class="mut">Aucun groupe trouvé pour cette recherche.</p>':`<p class="mut">${esc(S.groupsError||'Synchronisation des discussions WhatsApp en cours…')}</p><button onclick="refresh()">Réessayer</button>`);}
+async function refresh(){
+  try{
+    const r=await api('/api/groups?refresh=1');
+    if(Array.isArray(r)){G=r;S.groupsError=null}
+    else S.groupsError=r.error||'Le chargement des groupes a échoué.';
+  }catch(e){S.groupsError=`Erreur de communication : ${e.message}`}
+  lst();
+}
 function cnt(){$('#cnt').textContent=`(${sel.size} sélectionné${sel.size>1?'s':''})`}
 const tp=id=>{sel.has(id)?sel.delete(id):sel.add(id);cnt()};
 function setMode(m){mode=m;document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));$('#bd').hidden=m!=='daily';$('#bi').hidden=m!=='interval'}
@@ -109,9 +124,11 @@ const sb=$('#shotbtn');
 sb.onclick=async()=>{
   sb.classList.add('busy');
   try{
-    const c=await html2canvas(document.body,{x:scrollX,y:scrollY,width:innerWidth,height:innerHeight,scale:Math.min(devicePixelRatio||1,2),backgroundColor:'#f3efe6',useCORS:true,logging:false,ignoreElements:e=>['shotbtn','shotpop','shotbig'].includes(e.id)});
-    const u=c.toDataURL('image/png');
-    $('#shotimg').src=u;$('#shotbigimg').src=u;$('#shotdl').href=u;
+    const r=await fetch('/api/screenshot',{cache:'no-store'});
+    if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||`Erreur HTTP ${r.status}`)}
+    const blob=await r.blob(),u=URL.createObjectURL(blob),ext=blob.type.includes('svg')?'svg':'png';
+    if($('#shotimg').dataset.url)URL.revokeObjectURL($('#shotimg').dataset.url);
+    $('#shotimg').dataset.url=u;$('#shotimg').src=u;$('#shotbigimg').src=u;$('#shotdl').href=u;$('#shotdl').download=`capture-whatsapp.${ext}`;
     $('#shottime').textContent='Capture de '+new Date().toLocaleTimeString('fr-FR');$('#shotpop').hidden=false;
   }catch(e){alert('Capture impossible : '+e.message)}
   sb.classList.remove('busy');
