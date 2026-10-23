@@ -65,28 +65,34 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function dismissWhatsAppStartupPopup(activeClient) {
   const page = activeClient && activeClient.pupPage;
   if (!page || page.isClosed()) return false;
-  return page.evaluate(() => {
-    const visible = element => {
-      const style = window.getComputedStyle(element), rect = element.getBoundingClientRect();
-      return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
-    };
-    const pageText = (document.body.innerText || '').replace(/\s+/g, ' ').toLowerCase();
-    const isWelcomePopup = /what'?s new on whatsapp web|novedades de whatsapp web|nouveautés de whatsapp web/.test(pageText);
-    if (!isWelcomePopup) return false;
-    const button = [...document.querySelectorAll('button, [role="button"]')].find(element => {
-      const label = (element.innerText || element.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      return visible(element) && label === 'continue';
-    });
-    if (!button) return false;
-    button.click();
-    return true;
+  const hasWelcomePopup = () => page.evaluate(() => {
+    const text = (document.body.innerText || '').replace(/\s+/g, ' ').toLowerCase();
+    return /what'?s new on whatsapp web|novedades de whatsapp web|nouveautés de whatsapp web/.test(text);
   });
+  if (!await hasWelcomePopup()) return false;
+  for (const button of await page.$$('button.html-button')) {
+    const isContinueButton = await button.evaluate(element => {
+      const style = window.getComputedStyle(element), rect = element.getBoundingClientRect();
+      const label = (element.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      return label === 'continue' && style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+    });
+    if (!isContinueButton) continue;
+    await button.click();
+    await sleep(750);
+    return !await hasWelcomePopup();
+  }
+  return false;
 }
 function watchWhatsAppStartupPopup(activeClient) {
   clearTimeout(startupPopupTimer);
   let attempts = 0;
   const check = async () => {
-    if (state !== 'ready' || client !== activeClient || attempts >= 30) return;
+    if (state !== 'ready' || client !== activeClient) return;
+    if (attempts >= 60) {
+      log('La fenêtre de bienvenue WhatsApp est toujours présente; fermeture automatique non confirmée.', false);
+      startupPopupTimer = null;
+      return;
+    }
     attempts++;
     try {
       if (await dismissWhatsAppStartupPopup(activeClient)) {
