@@ -68,8 +68,8 @@ async function dismissWhatsAppStartupPopup(activeClient) {
   const hasWelcomePopup = () => page.evaluate(() => {
     const popup = document.querySelector('[data-testid="confirm-popup"]');
     const title = popup && popup.querySelector('[data-testid="popup-title"]');
-    const text = (title && title.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    return Boolean(popup && /what'?s new on whatsapp web|novedades de whatsapp web|nouveautés? sur whatsapp web/.test(text));
+    const text = (title && title.innerText || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    return Boolean(popup && /what'?s new on whatsapp web|novedades? de whatsapp web|novedades? sur whatsapp web/.test(text));
   });
   if (!await hasWelcomePopup()) return false;
   const popup = await page.$('[data-testid="confirm-popup"]');
@@ -81,11 +81,28 @@ async function dismissWhatsAppStartupPopup(activeClient) {
       return ['continue', 'continuer'].includes(label) && style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
     });
     if (!isContinueButton) continue;
-    await button.click();
-    await sleep(750);
-    return !await hasWelcomePopup();
+    try {
+      await button.click({ delay: 80 });
+      await sleep(1000);
+      if (!await hasWelcomePopup()) return true;
+    } catch (e) {
+      console.warn('Clic sur Continuer impossible:', e.message);
+    }
+    break;
   }
-  return false;
+  const closeButton = await page.$('[data-testid="confirm-popup"] button[aria-label="Fermer"]');
+  if (closeButton) {
+    try {
+      await closeButton.click({ delay: 80 });
+      await sleep(500);
+      if (!await hasWelcomePopup()) return true;
+    } catch (e) {
+      console.warn('Clic sur Fermer impossible:', e.message);
+    }
+  }
+  await page.keyboard.press('Escape');
+  await sleep(500);
+  return !await hasWelcomePopup();
 }
 function watchWhatsAppStartupPopup(activeClient) {
   clearTimeout(startupPopupTimer);
