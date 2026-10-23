@@ -66,15 +66,19 @@ async function dismissWhatsAppStartupPopup(activeClient) {
   const page = activeClient && activeClient.pupPage;
   if (!page || page.isClosed()) return false;
   const hasWelcomePopup = () => page.evaluate(() => {
-    const text = (document.body.innerText || '').replace(/\s+/g, ' ').toLowerCase();
-    return /what'?s new on whatsapp web|novedades de whatsapp web|nouveautés de whatsapp web/.test(text);
+    const popup = document.querySelector('[data-testid="confirm-popup"]');
+    const title = popup && popup.querySelector('[data-testid="popup-title"]');
+    const text = (title && title.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    return Boolean(popup && /what'?s new on whatsapp web|novedades de whatsapp web|nouveautés? sur whatsapp web/.test(text));
   });
   if (!await hasWelcomePopup()) return false;
-  for (const button of await page.$$('button.html-button')) {
+  const popup = await page.$('[data-testid="confirm-popup"]');
+  if (!popup) return false;
+  for (const button of await popup.$$('button.html-button')) {
     const isContinueButton = await button.evaluate(element => {
       const style = window.getComputedStyle(element), rect = element.getBoundingClientRect();
       const label = (element.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      return label === 'continue' && style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+      return ['continue', 'continuer'].includes(label) && style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
     });
     if (!isContinueButton) continue;
     await button.click();
