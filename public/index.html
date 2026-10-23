@@ -47,6 +47,13 @@ dialog::backdrop{background:#1b232066}label{display:block;font-weight:700;font-s
 #shotbig{position:fixed;inset:0;background:#141a18d9;display:grid;place-items:center;z-index:60;cursor:zoom-out;padding:3vh 3vw}
 #shotbig img{max-width:94vw;max-height:84vh;border-radius:12px;box-shadow:0 30px 80px #000a;background:#fff}
 #shotbig a{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--card);color:var(--ink);padding:9px 18px;border-radius:12px;font-weight:700;text-decoration:none}
+#shottools{position:fixed;top:16px;right:16px;display:flex;gap:8px;z-index:61}
+#keypanel{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);width:min(760px,94vw);padding:14px;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 16px 40px #0005;z-index:61}
+#keypanel .keys{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+#keypanel .keys button{padding:6px 10px}
+#keypanel .type-row{display:flex;gap:8px}
+#keypanel .type-row input{flex:1;min-width:0}
+#keypanel .hint{margin:0;font-size:12px;color:var(--mut)}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
 <header><h1>Vos groupes WhatsApp, des messages à l'heure dite.</h1><div class="acts"><div class="pill" id="pill"><span class="dot"></span><span id="st">Démarrage…</span></div><button id="logout" hidden onclick="logout()">Déconnexion</button></div></header>
@@ -61,7 +68,19 @@ dialog::backdrop{background:#1b232066}label{display:block;font-weight:700;font-s
 <div class="acts" style="margin-top:22px"><span class="sp"></span><button onclick="dlg.close()">Annuler</button><button class="pri" onclick="saveS()">Enregistrer</button></div></dialog>
 <button id="shotbtn" title="Capturer la page" aria-label="Capturer la page"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8a2 2 0 0 1 2-2h1.5l1.2-2h6.6l1.2 2H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
 <div id="shotpop" hidden title="Agrandir"><img id="shotimg" alt="Dernière capture"><button id="shotx" aria-label="Fermer">×</button><span id="shottime"></span></div>
-<div id="shotbig" hidden><img id="shotbigimg" alt="Capture agrandie"><a id="shotdl" download="capture-relais.png">Télécharger</a></div>
+<div id="shotbig" hidden>
+  <div id="shottools"><button id="shotrefresh">Actualiser la capture</button><button id="keytoggle">Clavier virtuel</button><button id="shotclose">Fermer</button></div>
+  <img id="shotbigimg" alt="Capture WhatsApp agrandie">
+  <a id="shotdl" download="capture-whatsapp.png">Télécharger</a>
+  <section id="keypanel" hidden aria-label="Clavier virtuel">
+    <p class="hint">Ces commandes agissent uniquement dans WhatsApp Web. Entrée peut envoyer le message actuellement saisi.</p>
+    <div class="keys">
+      <button data-key="Escape">Échap</button><button data-key="Tab">Tab</button><button data-key="ArrowUp">↑</button><button data-key="ArrowDown">↓</button><button data-key="ArrowLeft">←</button><button data-key="ArrowRight">→</button><button data-key="Home">Début</button><button data-key="End">Fin</button><button data-key="PageUp">Page ↑</button><button data-key="PageDown">Page ↓</button><button data-key="Backspace">Effacer</button><button data-key="Delete">Suppr.</button><button data-key="Space">Espace</button><button data-key="Enter">Entrée</button>
+    </div>
+    <div class="type-row"><input id="keytext" maxlength="500" placeholder="Texte à saisir dans le champ actif de WhatsApp"><button id="keysend" class="pri">Saisir</button></div>
+    <p id="keyerror" class="hint" role="status"></p>
+  </section>
+</div>
 <script>
 const $=s=>document.querySelector(s),J=['D','L','M','M','J','V','S'],JN=['dim','lun','mar','mer','jeu','ven','sam'];
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -154,21 +173,49 @@ const tg=async(id,v)=>{await api('/api/schedules/'+id,'PUT',{enabled:v});tick()}
 const del=async id=>{if(confirm('Supprimer cet ensemble ?')){await api('/api/schedules/'+id,'DELETE');tick()}};
 const run=async id=>{const r=await api('/api/schedules/'+id+'/run','POST');if(r.error)alert(r.error);tick()};
 const sb=$('#shotbtn');
+async function captureWhatsApp(){
+  const r=await fetch('/api/screenshot',{cache:'no-store'});
+  if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||`Erreur HTTP ${r.status}`)}
+  const blob=await r.blob(),u=URL.createObjectURL(blob),ext=blob.type.includes('svg')?'svg':'png';
+  if($('#shotimg').dataset.url)URL.revokeObjectURL($('#shotimg').dataset.url);
+  $('#shotimg').dataset.url=u;$('#shotimg').src=u;$('#shotbigimg').src=u;$('#shotdl').href=u;$('#shotdl').download=`capture-whatsapp.${ext}`;
+  $('#shottime').textContent='Capture de '+new Date().toLocaleTimeString('fr-FR');
+}
 sb.onclick=async()=>{
   sb.classList.add('busy');
-  try{
-    const r=await fetch('/api/screenshot',{cache:'no-store'});
-    if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||`Erreur HTTP ${r.status}`)}
-    const blob=await r.blob(),u=URL.createObjectURL(blob),ext=blob.type.includes('svg')?'svg':'png';
-    if($('#shotimg').dataset.url)URL.revokeObjectURL($('#shotimg').dataset.url);
-    $('#shotimg').dataset.url=u;$('#shotimg').src=u;$('#shotbigimg').src=u;$('#shotdl').href=u;$('#shotdl').download=`capture-whatsapp.${ext}`;
-    $('#shottime').textContent='Capture de '+new Date().toLocaleTimeString('fr-FR');$('#shotpop').hidden=false;
-  }catch(e){alert('Capture impossible : '+e.message)}
-  sb.classList.remove('busy');
+  try{await captureWhatsApp();$('#shotpop').hidden=false}
+  catch(e){alert('Capture impossible : '+e.message)}
+  finally{sb.classList.remove('busy')}
 };
-$('#shotpop').onclick=()=>{$('#shotbig').hidden=false};
+$('#shotpop').onclick=()=>{$('#keypanel').hidden=true;$('#shotbig').hidden=false};
 $('#shotx').onclick=e=>{e.stopPropagation();$('#shotpop').hidden=true};
-$('#shotbig').onclick=e=>{if(e.target.id!=='shotdl')$('#shotbig').hidden=true};
-addEventListener('keydown',e=>{if(e.key==='Escape')$('#shotbig').hidden=true});
+$('#shotbig').onclick=e=>{if(e.target===$('#shotbig'))$('#shotbig').hidden=true};
+$('#shotclose').onclick=()=>{$('#shotbig').hidden=true;$('#keypanel').hidden=true};
+$('#keytoggle').onclick=()=>{$('#keypanel').hidden=!$('#keypanel').hidden;if(!$('#keypanel').hidden)$('#keytext').focus()};
+$('#shotrefresh').onclick=async()=>{
+  $('#shotrefresh').disabled=true;
+  try{await captureWhatsApp()}catch(e){alert('Actualisation impossible : '+e.message)}
+  finally{$('#shotrefresh').disabled=false}
+};
+async function sendBrowserInput(input){
+  const r=await api('/api/browser/input','POST',input);
+  if(r.error)throw new Error(r.error);
+  await captureWhatsApp();
+  $('#keyerror').textContent='Commande envoyée.';
+}
+document.querySelectorAll('#keypanel [data-key]').forEach(b=>b.onclick=async()=>{
+  const key=b.dataset.key;
+  if(key==='Enter'&&!confirm('La touche Entrée peut envoyer le message actuellement saisi dans WhatsApp. Continuer ?'))return;
+  $('#keyerror').textContent='';
+  try{await sendBrowserInput({key})}catch(e){$('#keyerror').textContent=e.message}
+});
+$('#keysend').onclick=async()=>{
+  const input=$('#keytext'),text=input.value;
+  if(!text)return;
+  $('#keyerror').textContent='';
+  try{await sendBrowserInput({text});input.value=''}catch(e){$('#keyerror').textContent=e.message}
+};
+$('#keytext').addEventListener('keydown',e=>{if(e.key==='Enter')e.preventDefault()});
+addEventListener('keydown',e=>{if(e.key==='Escape'&& !$('#keypanel').contains(e.target)){$('#shotbig').hidden=true;$('#keypanel').hidden=true}});
 tick();setInterval(tick,4000);
 </script></body></html>

@@ -271,6 +271,26 @@ app.get('/api/screenshot', async (_, res) => {
     res.set('Cache-Control', 'no-store').type('png').send(Buffer.from(png));
   } catch (e) { res.status(500).json({ error: `Capture du navigateur WhatsApp impossible : ${e.message}` }); }
 });
+app.post('/api/browser/input', async (req, res) => {
+  if (MOCK) return res.status(503).json({ error: 'Le clavier virtuel est indisponible en mode démo.' });
+  if (state !== 'ready' || !client || !client.pupPage || client.pupPage.isClosed())
+    return res.status(503).json({ error: `Navigateur WhatsApp non disponible (état : ${state}).` });
+  const { key, text } = req.body || {};
+  const allowedKeys = new Set(['Escape', 'Enter', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Backspace', 'Delete', 'Space']);
+  if (typeof key === 'string' && allowedKeys.has(key) && text === undefined) {
+    try {
+      await client.pupPage.keyboard.press(key);
+      return res.json({ ok: true });
+    } catch (e) { return res.status(500).json({ error: `Envoi de la touche impossible : ${e.message}` }); }
+  }
+  if (typeof text === 'string' && text.length > 0 && text.length <= 500 && key === undefined) {
+    try {
+      await client.pupPage.keyboard.type(text);
+      return res.json({ ok: true });
+    } catch (e) { return res.status(500).json({ error: `Saisie du texte impossible : ${e.message}` }); }
+  }
+  res.status(400).json({ error: 'Touche non autorisée ou texte invalide (500 caractères maximum).' });
+});
 app.get('/api/logs', (_, res) => res.json(logs));
 app.get('/api/schedules', (_, res) => res.json(schedules));
 const clean = b => {
